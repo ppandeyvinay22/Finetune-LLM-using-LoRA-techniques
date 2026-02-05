@@ -1,0 +1,12 @@
+# Local virtual environments
+/task1/task1-venv/
+/task2/task2-env/
+
+# Python caches
+**/__pycache__/
+*.py[cod]
+
+# Common tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
