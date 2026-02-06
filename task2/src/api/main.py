@@ -70,7 +70,9 @@ class LocalModel:
                 top_p=0.9,
                 eos_token_id=tokenizer.eos_token_id,
             )
-        text = tokenizer.decode(output[0], skip_special_tokens=True)
+        # Decode only newly generated tokens (avoid echoing the prompt).
+        gen_tokens = output[0][inputs["input_ids"].shape[1] :]
+        text = tokenizer.decode(gen_tokens, skip_special_tokens=True)
         return text
 
 
@@ -106,6 +108,15 @@ def extract_recipe(text: str) -> str:
         second = text.find("Recipe:", first + 1)
         if second != -1:
             text = text[:second].strip()
+    # Clean duplicate "Recipe: Recipe:" prefix.
+    text = text.replace("Recipe: Recipe:", "Recipe:", 1).strip()
+    # Minimal cleanup: keep only the first 6 steps if present.
+    step_parts = text.split("Step ")
+    if len(step_parts) > 1:
+        header = step_parts[0].strip()
+        steps = step_parts[1:7]
+        rebuilt = header + " Step " + "Step ".join(s.strip() for s in steps if s.strip())
+        text = rebuilt.strip()
     return text.strip()
 
 
@@ -119,8 +130,10 @@ def chat(req: ChatRequest):
     prompt = (
         "You are a helpful cooking assistant. "
         f"Given these ingredients: {req.ingredients}. "
-        "Suggest one simple recipe with 4-6 short steps. "
-        "Return only the recipe and steps."
+        "Return exactly one recipe with a title and exactly 6 short steps. "
+        "Do not include any optional steps. "
+        "Do not repeat the word 'Recipe' more than once. "
+        "Return only the recipe title and steps."
     )
 
     if local_model.can_load():
