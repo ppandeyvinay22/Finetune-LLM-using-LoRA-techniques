@@ -32,22 +32,6 @@ pip install -r requirements.txt
 pip install -r requirements-train.txt
 ```
 
-## Setup (Windows)
-1. Create venv
-```bat
-python -m venv task2-env
-```
-
-2. Install runtime deps
-```bat
-pip install -r requirements.txt
-```
-
-3. Optional: install training deps
-```bat
-pip install -r requirements-train.txt
-```
-
 ## Environment Variables
 Configured in `.env`:
 - `API_URL` for CLI

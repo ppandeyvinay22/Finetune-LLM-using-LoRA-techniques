@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import re
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -102,22 +103,80 @@ def extract_recipe(text: str) -> str:
         idx = text.find(stop)
         if idx != -1:
             text = text[:idx].strip()
+    # Normalize repeated prefix tokens before deciding if it emitted multiple blocks.
+    text = re.sub(r"(?:\bRecipe:\s*){2,}", "Recipe: ", text, flags=re.IGNORECASE).strip()
     # If it repeats "Recipe:" keep only the first block.
     first = text.find("Recipe:")
     if first != -1:
         second = text.find("Recipe:", first + 1)
         if second != -1:
             text = text[:second].strip()
-    # Clean duplicate "Recipe: Recipe:" prefix.
-    text = text.replace("Recipe: Recipe:", "Recipe:", 1).strip()
-    # Minimal cleanup: keep only the first 6 steps if present.
-    step_parts = text.split("Step ")
-    if len(step_parts) > 1:
-        header = step_parts[0].strip()
-        steps = step_parts[1:7]
-        rebuilt = header + " Step " + "Step ".join(s.strip() for s in steps if s.strip())
-        text = rebuilt.strip()
-    return text.strip()
+    title, body = _extract_title_and_body(text)
+    steps = _extract_meaningful_steps(body)
+    if not steps:
+        return text.strip()
+    return _format_recipe(title, steps)
+
+
+def _extract_title_and_body(text: str) -> tuple[str, str]:
+    text = re.sub(r"(?:\bRecipe:\s*){2,}", "Recipe: ", text, flags=re.IGNORECASE).strip()
+    if "Recipe:" not in text:
+        return "Recipe", text.strip()
+    after = text.split("Recipe:", 1)[1].strip()
+    step_match = re.search(r"\bStep\s*\d+\s*[:.)-]", after, flags=re.IGNORECASE)
+    if step_match:
+        title = after[: step_match.start()].strip(" .:-")
+        body = after[step_match.start() :].strip()
+        return (title or "Recipe"), body
+    title = after.split(".", 1)[0].strip(" .:-")
+    return (title or "Recipe"), after
+
+
+def _extract_meaningful_steps(body: str) -> list[str]:
+    numbered = re.findall(
+        r"(?:Step\s*)?\d+\s*[:.)-]\s*(.+?)(?=(?:\s+(?:Step\s*)?\d+\s*[:.)-]\s*)|$)",
+        body,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    candidates = numbered if numbered else re.split(r"[.!?]\s+", body)
+    cleaned: list[str] = []
+    seen = set()
+    for c in candidates:
+        step = " ".join(c.replace("\n", " ").split()).strip(" .,:;-")
+        step = re.split(r"\boptional\b|\btips?\b|note:", step, maxsplit=1, flags=re.IGNORECASE)[0].strip(" .,:;-")
+        words = step.split()
+        if len(words) < 2 or len(words) > 22:
+            continue
+        if re.fullmatch(r"step\s*\d+\.?", step, flags=re.IGNORECASE):
+            continue
+        lowered = step.lower()
+        if lowered in seen:
+            continue
+        if any(tok in lowered for tok in ("enjoy", "serve and enjoy")):
+            continue
+        if lowered in {
+            "serve warm",
+            "serve immediately",
+            "adjust seasoning as needed",
+            "adjust salt and pepper as needed",
+        }:
+            continue
+        seen.add(lowered)
+        cleaned.append(step)
+    if not cleaned:
+        return []
+    # Keep adaptive complexity but cap long noisy endings.
+    if len(cleaned) < 4:
+        return cleaned
+    return cleaned[:6]
+
+
+def _format_recipe(title: str, steps: list[str]) -> str:
+    rendered_steps = " ".join(f"Step {i+1}: {s}." for i, s in enumerate(steps))
+    title = re.sub(r"^(?:Recipe:\s*)+", "", title, flags=re.IGNORECASE).strip(" .:-")
+    if not title or title.lower() == "recipe":
+        title = "Simple Home-Style Recipe"
+    return f"Recipe: {title}. {rendered_steps}".strip()
 
 
 @app.get("/health")
@@ -130,8 +189,10 @@ def chat(req: ChatRequest):
     prompt = (
         "You are a helpful cooking assistant. "
         f"Given these ingredients: {req.ingredients}. "
-        "Return exactly one recipe with a title and exactly 6 short steps. "
-        "Do not include any optional steps. "
+        "Return exactly one recipe with a clear title and a concise step list. "
+        "Use 4 to 8 steps depending on complexity; keep only meaningful cooking actions. "
+        "Do not include optional steps, tips, or serving notes. "
+        "Do not output placeholder text like 'Step 2' as a step description. "
         "Do not repeat the word 'Recipe' more than once. "
         "Return only the recipe title and steps."
     )
